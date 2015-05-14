@@ -170,6 +170,11 @@ pub mod signal {
     pub const SIGXCPU:      libc::c_int = 30;
     pub const SIGFSZ:       libc::c_int = 31;
 
+    // 'how' arguments for sigprocmask
+    pub const SIG_BLOCK:   libc::c_int = 0;
+    pub const SIG_UNBLOCK: libc::c_int = 1;
+    pub const SIG_SETMASK: libc::c_int = 2;
+
     // This definition is not as accurate as it could be, {pid, uid, status} is
     // actually a giant union. Currently we're only interested in these fields,
     // however.
@@ -238,6 +243,11 @@ pub mod signal {
     pub const SIGUSR1:      libc::c_int = 30;
     pub const SIGUSR2:      libc::c_int = 31;
 
+    // 'how' arguments for sigprocmask
+    pub const SIG_BLOCK:   libc::c_int = 1;
+    pub const SIG_UNBLOCK: libc::c_int = 2;
+    pub const SIG_SETMASK: libc::c_int = 3;
+
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub type sigset_t = u32;
     #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
@@ -293,6 +303,11 @@ mod ffi {
         pub fn sigaddset(set: *mut sigset_t, signum: libc::c_int) -> libc::c_int;
         pub fn sigdelset(set: *mut sigset_t, signum: libc::c_int) -> libc::c_int;
         pub fn sigemptyset(set: *mut sigset_t) -> libc::c_int;
+        pub fn sigprocmask(how: libc::c_int,
+                           set: *const sigset_t,
+                           oldset: *mut sigset_t) -> libc::c_int;
+        pub fn sigpending(set: *mut sigset_t) -> libc::c_int;
+        pub fn sigsuspend(mask: *const sigset_t) -> libc::c_int;
 
         pub fn kill(pid: libc::pid_t, signum: libc::c_int) -> libc::c_int;
     }
@@ -304,6 +319,7 @@ pub struct SigSet {
 }
 
 pub type SigNum = libc::c_int;
+pub type SigProcMaskHow = libc::c_int;
 
 impl SigSet {
     pub fn empty() -> SigSet {
@@ -364,6 +380,35 @@ pub unsafe fn sigaction(signum: SigNum, sigaction: &SigAction) -> Result<SigActi
     Ok(SigAction { sigaction: oldact })
 }
 
+pub unsafe fn sigprocmask(how: SigProcMaskHow, set: &SigSet) -> Result<SigSet> {
+    let mut oldset = mem::uninitialized::<sigset_t>();
+
+    let res = ffi::sigprocmask(how, &set.sigset as *const sigset_t, &mut oldset as *mut sigset_t);
+
+    if res < 0 {
+        return Err(Error::Sys(Errno::last()));
+    }
+    Ok(SigSet { sigset: oldset})
+}
+
+pub unsafe fn sigpending() -> Result<SigSet> {
+    let mut set = mem::uninitialized::<sigset_t>();
+
+    let res = ffi::sigpending(&mut set as *mut sigset_t);
+    if res < 0 {
+        return Err(Error::Sys(Errno::last()));
+    }
+    Ok(SigSet { sigset: set})
+}
+
+pub unsafe fn sigsuspend(mask: &SigSet) -> Result<()> {
+    let res = ffi::sigsuspend(&mask.sigset as *const sigset_t);
+    if res < 0 {
+        return Err(Error::Sys(Errno::last()));
+    }
+    Ok(())
+}
+
 pub fn kill(pid: libc::pid_t, signum: SigNum) -> Result<()> {
     let res = unsafe { ffi::kill(pid, signum) };
 
@@ -372,4 +417,68 @@ pub fn kill(pid: libc::pid_t, signum: SigNum) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+pub mod test {
+use sys::signal::*;
+use libc;
+use libc::funcs::posix88::unistd::getpid;
+
+static mut myflag: libc::c_int = 0;
+
+#[no_mangle]
+pub extern fn flag_setter(sig: libc::c_int) {
+    unsafe {
+        myflag = sig;
+    }
+}
+
+#[test]
+fn test_sigaction() {
+    let mypid = unsafe { getpid() };
+    // Set a signal handler
+    {
+        let mut mask = SigSet::empty();
+        assert_eq!(mask.add(SIGWINCH), Ok(()));
+        let flags = signal::SA_NOCLDSTOP;
+        let action = SigAction::new(flag_setter, flags, mask.clone());
+        let res = unsafe { sigaction(SIGWINCH, &action) };
+        match res {
+            Ok(sigact) => {
+                assert!(sigact.sigaction.sa_flags != signal::SA_NOCLDSTOP);
+            }
+            _ => { assert!(false); }
+        }
+    }
+
+    // Fire the handler
+    {
+        assert_eq!(kill(mypid, SIGWINCH), Ok(()));
+        while unsafe { myflag } == 0 {
+        }
+        let flag = unsafe { myflag };
+        assert_eq!(flag, SIGWINCH);
+    }
+    // Reset
+    unsafe {
+        myflag = 0;
+    }
+
+    // Suspend SIGWINCH
+    {
+        let mut mask = SigSet::empty();
+        assert_eq!(mask.add(SIGWINCH), Ok(()));
+        assert_eq!(unsafe { sigsuspend(&mask) }, Ok(()));
+        assert_eq!(kill(mypid, SIGWINCH), Ok(()));
+        // Shouldn't change!
+        let flag = unsafe { myflag };
+        assert_eq!(flag, 0);
+    }
+}
+
+#[test]
+fn test_sigsuspend() {
+
+}
 }
