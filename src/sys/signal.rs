@@ -92,6 +92,11 @@ pub mod signal {
     pub const SIGSYS:       libc::c_int = 31;
     pub const SIGUNUSED:    libc::c_int = 31;
 
+    // 'how' arguments for sigprocmask
+    pub const SIG_BLOCK:   libc::c_int = 0;
+    pub const SIG_UNBLOCK: libc::c_int = 1;
+    pub const SIG_SETMASK: libc::c_int = 2;
+
     // This definition is not as accurate as it could be, {pid, uid, status} is
     // actually a giant union. Currently we're only interested in these fields,
     // however.
@@ -315,7 +320,7 @@ mod ffi {
 
 #[derive(Clone, Copy)]
 pub struct SigSet {
-    sigset: sigset_t
+    pub sigset: sigset_t
 }
 
 pub type SigNum = libc::c_int;
