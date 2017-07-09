@@ -191,6 +191,7 @@ branches:
     # bors-ng branches; see https://bors-ng.github.io/getting-started/
     - trying
     - staging
+    - qemu-system
 
 notifications:
   email:
